@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Correcteur de Grammaire Française • Pawan</title>
+  <style>
+    :root{
+      --bg:#f6f8fb; --card:#fff; --muted:#6b7280; --accent:#0ea5a4; --danger:#ef4444;
+      --glass: rgba(255,255,255,0.6);
+    }
+    html,body{height:100%;margin:0;font-family:Inter, "Segoe UI", Roboto, Arial, sans-serif;background:linear-gradient(180deg,#f3f6fb 0%,#ffffff 100%);}
+    .wrap{max-width:980px;margin:32px auto;padding:20px;}
+    header{display:flex;align-items:center;gap:16px}
+    .logo{width:68px;height:68px;border-radius:12px;background:linear-gradient(135deg,#06b6d4,#3b82f6);display:flex;align-items:center;justify-content:center;color:white;font-weight:700;font-size:22px;box-shadow:0 6px 18px rgba(16,24,40,0.08)}
+    h1{margin:0;font-size:22px;color:#0f172a}
+    p.lead{margin:6px 0 0;color:var(--muted)}
+    .card{background:var(--card);border-radius:12px;padding:18px;margin-top:18px;box-shadow:0 6px 18px rgba(16,24,40,0.06)}
+    .controls{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}
+    textarea{width:100%;min-height:140px;padding:14px;border-radius:10px;border:1px solid #e6eef6;font-size:16px;resize:vertical;outline:none;box-shadow:inset 0 1px 0 rgba(15,23,42,0.02)}
+    .btn{
+      background:var(--accent);color:#fff;padding:10px 16px;border-radius:10px;border:none;cursor:pointer;font-weight:600;
+      box-shadow:0 6px 14px rgba(14,165,164,0.12)
+    }
+    .btn.secondary{background:#f3f4f6;color:#111;border:1px solid #e6eef6}
+    .row{display:flex;gap:12px;align-items:center}
+    #results{margin-top:16px}
+    .issue{border-left:4px solid #fcd34d;background:linear-gradient(90deg,#fff, #fffbeb);padding:12px;border-radius:8px;margin-bottom:12px}
+    .issue strong{display:block;color:#92400e}
+    .issue .excerpt{font-weight:600;margin-top:6px;color:#0f172a}
+    .issue .suggest{margin-top:8px;color:#065f46}
+    .issue .explain{margin-top:8px;color:var(--muted);font-size:14px}
+    .no-issue{padding:12px;border-radius:8px;background:#ecfdf5;color:#065f46;margin-bottom:12px}
+    .corrected{margin-top:12px;padding:12px;border-radius:8px;background:#eef2ff;border:1px solid #e0e7ff;color:#3730a3}
+    footer{margin-top:20px;text-align:center;color:var(--muted);font-size:14px}
+    .small{font-size:13px;color:var(--muted)}
+    .loader{display:inline-block;width:18px;height:18px;border-radius:50%;border:3px solid rgba(255,255,255,0.2);border-top-color:rgba(255,255,255,0.9);animation:spin .8s linear infinite;margin-left:8px}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    /* responsive */
+    @media(max-width:640px){header{flex-direction:column;align-items:flex-start}.controls{flex-direction:column}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="logo">FR</div>
+      <div>
+        <h1>Correcteur de Grammaire Française</h1>
+        <p class="lead">Corrections et explications claires pour les apprenants. Entrez une phrase en français puis cliquez Vérifier.</p>
+      </div>
+    </header>
+
+    <div class="card">
+      <div style="margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+        <div class="small">Seul le français est pris en charge. Outil gratuit, instantané.</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn secondary" id="exampleBtn">Exemples</button>
+          <button class="btn" id="checkBtn">Vérifier</button>
+        </div>
+      </div>
+
+      <textarea id="inputText" placeholder="Tapez ou collez une phrase en français ici...">Je suis 20</textarea>
+
+      <div id="results"></div>
+      <div id="correctedContainer"></div>
+
+      <div style="display:flex;gap:8px;align-items:center;margin-top:12px">
+        <button class="btn" id="copyBtn">Copier la correction</button>
+        <button class="btn secondary" id="clearBtn">Effacer</button>
+        <div id="status" class="small" style="margin-left:auto;color:var(--muted)">Prêt</div>
+      </div>
+    </div>
+
+    <footer>
+      <div>Créé par Pawan • Outil pour DELF & apprenants</div>
+      <div class="small" style="margin-top:6px">Les suggestions combinent règles locales et LanguageTool pour des explications pédagogiques.</div>
+    </footer>
+  </div>
+
+  <script>
+    // ---------- Configuration ----------
+    const LT_ENDPOINT = "https://api.languagetoolplus.com/v2/check"; // public LanguageTool endpoint
+    const LANGUAGE = "fr";
+    // ---------- Utility helpers ----------
+    function escapeHtml(s){ return s.replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;"); }
+    function insertAfter(str, index, insertion){ return str.slice(0,index) + insertion + str.slice(index); }
+
+    // ---------- Local learner-focused rules ----------
+    function runLocalRules(text){
+      const suggestions = [];
+
+      // Age pattern: "Je suis 20" -> "J'ai 20 ans"
+      const ageRegex = /\bJe\s+suis\s+(\d{1,3})(\s*ans)?\b/ig;
+      let m;
+      while((m = ageRegex.exec(text)) !== null){
+        suggestions.push({
+          id: "local-age-"+m.index,
+          kind: "age",
+          offset: m.index,
+          length: m[0].length,
+          excerpt: m[0],
+          suggestion: `J'ai ${m[1]} ans`,
+          message: "Pour exprimer l'âge, on utilise le verbe avoir : « J'ai <nombre> ans » plutôt que « Je suis <nombre> ».",
+          source: "Règle locale"
+        });
+      }
+
+      // "Je suis faim" -> "J'ai faim"
+      const faimRegex = /\bJe\s+suis\s+faim\b/ig;
+      if(faimRegex.test(text)){
+        const idx = text.search(faimRegex);
+        suggestions.push({
+          id: "local-faim",
+          kind: "faim",
+          offset: idx,
+          length: "Je suis faim".length,
+          excerpt: text.substring(idx, idx + "Je suis faim".length),
+          suggestion: "J'ai faim",
+          message: "On utilise le verbe avoir pour indiquer la faim : « J'ai faim ».",
+          source: "Règle locale"
+        });
+      }
+
+      // "à le" -> "au"
+      const aLeRegex = /\bà\s+le\s+([A-Za-zÀ-ÖØ-öø-ÿ'\-]+)\b/ig;
+      while((m = aLeRegex.exec(text)) !== null){
+        suggestions.push({
+          id: "local-au-"+m.index,
+          kind: "au",
+          offset: m.index,
+          length: m[0].length,
+          excerpt: m[0],
+          suggestion: `au ${m[1]}`,
+          message: "Contraction manquante : « à le » se contracte en « au » devant un nom masculin.",
+          source: "Règle locale"
+        });
+      }
+
+      // "Je suis <adj> (être/avoir confusions)" -> suggest check for avoir/être
+      const suisAdjRegex = /\bJe\s+suis\s+([a-zàâäéèêëîïôöùûüç\-]{2,})\b/ig;
+      while((m = suisAdjRegex.exec(text)) !== null){
+        const adj = m[1].toLowerCase();
+        // common noun confusions: faim, soif, sommeil should use avoir
+        if(["faim","soif","sommeil","peur","raison"].includes(adj)){
+          suggestions.push({
+            id: "local-avoir-"+m.index,
+            kind: "avoir-etre",
+            offset: m.index,
+            length: m[0].length,
+            excerpt: m[0],
+            suggestion: `J'ai ${adj}`,
+            message: `Vérifiez si le verbe correct est "avoir" et non "être" pour l'expression "${adj}".`,
+            source: "Règle locale"
+          });
+        }
+      }
+
+      // Common learner pattern: numbers written without "ans" or missing unit
+      const numNoUnit = /\b(Je\s+(?:ai|suis)\s+)(\d{1,3})(?!\s*(ans|ans\.|ans,|\s))/ig;
+      while((m = numNoUnit.exec(text)) !== null){
+        // only trigger when it looks like age pattern but missing 'ans'
+        suggestions.push({
+          id: "local-numunit-"+m.index,
+          kind: "num-unit",
+          offset: m.index,
+          length: m[0].length,
+          excerpt: m[0],
+          suggestion: m[1].trim() + " " + m[2] + " ans",
+          message: "Ajoutez l'unité 'ans' quand vous parlez d'âge.",
+          source: "Règle locale"
+        });
+      }
+
+      return suggestions;
+    }
+
+    // ---------- Apply replacements to build a corrected sentence ----------
+    // We will take all suggestions with offsets (local + LanguageTool), sort by offset,
+    // and apply replacements left→right. If overlapping, prefer local suggestions first.
+    function buildCorrectedSentence(original, allSuggestions){
+      // Normalize into objects with offset & length & replacement
+      const ops = [];
+      allSuggestions.forEach(s => {
+        if (typeof s.offset === "number" && typeof s.length === "number" && s.suggestion){
+          ops.push({offset:s.offset, length:s.length, repl:s.suggestion, id:s.id || s.rule});
+        } else if (s.offset === undefined && s.matchText && s.suggestion){
+          // fallback: try to replace first occurrence
+          const idx = original.indexOf(s.matchText);
+          if (idx !== -1) ops.push({offset:idx, length:s.matchText.length, repl:s.suggestion, id:s.id || s.rule});
+        }
+      });
+      // sort by offset ascending, then by longer length first
+      ops.sort((a,b)=> a.offset - b.offset || b.length - a.length);
+
+      // Merge, skipping overlaps: build result step-by-step
+      let cursor = 0;
+      let out = "";
+      for (let i=0;i<ops.length;i++){
+        const op = ops[i];
+        if (op.offset < cursor) continue; // overlapping, skip
+        out += original.slice(cursor, op.offset);
+        out += op.repl;
+        cursor = op.offset + op.length;
+      }
+      out += original.slice(cursor);
+      return out;
+    }
+
+    // ---------- Display helpers ----------
+    function showStatus(text, busy=false){
+      const el = document.getElementById("status");
+      el.innerHTML = text + (busy ? " <span class='loader'></span>" : "");
+    }
+
+    function renderResults(local, ltMatches, text){
+      const results = document.getElementById("results");
+      results.innerHTML = "";
+
+      const combined = [];
+      // Add local suggestions first
+      local.forEach(s => combined.push(s));
+      // Convert LanguageTool matches into our shape
+      (ltMatches||[]).forEach((m,i) => {
+        const excerpt = text.substring(m.offset, m.offset + m.length);
+        const repl = (m.replacements && m.replacements.length) ? m.replacements[0].value : "";
+        combined.push({
+          id: "lt-"+i,
+          rule: m.rule ? m.rule.id : ("lt-"+i),
+          offset: m.offset,
+          length: m.length,
+          excerpt: excerpt,
+          suggestion: repl,
+          message: m.message,
+          source: "LanguageTool"
+        });
+      });
+
+      if (combined.length === 0){
+        results.innerHTML = `<div class="no-issue">✅ Aucun problème détecté.</div>`;
+        document.getElementById("correctedContainer").innerHTML = `<div class="corrected"><strong>Phrase finale :</strong> ${escapeHtml(text)}</div>`;
+        return;
+      }
+
+      // Show each suggestion with clear explanation
+      combined.forEach(c => {
+        const div = document.createElement("div");
+        div.className = "issue";
+        div.innerHTML = `<strong>${c.source} suggestion</strong>
+                         <div class="excerpt">${escapeHtml(c.excerpt)}</div>
+                         <div class="suggest"><strong>Correction proposée :</strong> ${escapeHtml(c.suggestion || "—")}</div>
+                         <div class="explain">${escapeHtml(c.message || "")}</div>`;
+        results.appendChild(div);
+      });
+
+      // Build corrected sentence using combined ops (prefer local so they come first)
+      const corrected = buildCorrectedSentence(text, combined);
+      document.getElementById("correctedContainer").innerHTML = `<div class="corrected"><strong>Phrase corrigée :</strong> ${escapeHtml(corrected)}</div>`;
+    }
+
+    // ---------- Main function ----------
+    async function checkGrammar(){
+      const txtEl = document.getElementById("inputText");
+      const text = txtEl.value || "";
+      const results = document.getElementById("results");
+      results.innerHTML = "";
+      document.getElementById("correctedContainer").innerHTML = "";
+
+      if (!text.trim()){
+        results.innerHTML = `<div class="issue"><strong>Entrez une phrase en français pour vérifier.</strong></div>`;
+        return;
+      }
+
+      showStatus("Analyse en cours...", true);
+
+      // 1) run local rules
+      const local = runLocalRules(text);
+
+      // 2) call LanguageTool
+      let ltMatches = [];
+      try {
+        const body = `text=${encodeURIComponent(text)}&language=${LANGUAGE}`;
+        const resp = await fetch(LT_ENDPOINT, {
+          method: "POST",
+          headers: {"Content-Type":"application/x-www-form-urlencoded"},
+          body
+        });
+        if (!resp.ok){
+          throw new Error("LanguageTool error: " + resp.status);
+        }
+        const data = await resp.json();
+        ltMatches = data.matches || [];
+      } catch (err){
+        // show local suggestions and an error note
+        const errDiv = document.createElement("div");
+        errDiv.className = "issue";
+        errDiv.innerHTML = `<strong>Erreur technique :</strong> impossible de contacter le service de vérification externe. Les règles locales ont été appliquées.`;
+        results.appendChild(errDiv);
+        // still render local-only results below
+      }
+
+      // 3) render combined results
+      renderResults(local, ltMatches, text);
+      showStatus("Terminé", false);
+    }
+
+    // ---------- UI wiring ----------
+    document.getElementById("checkBtn").addEventListener("click", checkGrammar);
+    document.getElementById("inputText").addEventListener("keydown", (e)=>{ if(e.ctrlKey && e.key === "Enter") checkGrammar(); });
+    document.getElementById("clearBtn").addEventListener("click", ()=>{
+      document.getElementById("inputText").value = "";
+      document.getElementById("results").innerHTML = "";
+      document.getElementById("correctedContainer").innerHTML = "";
+      showStatus("Prêt", false);
+    });
+    document.getElementById("exampleBtn").addEventListener("click", ()=>{
+      document.getElementById("inputText").value = "Je suis 20";
+      checkGrammar();
+    });
+    document.getElementById("copyBtn").addEventListener("click", ()=>{
+      const node = document.getElementById("correctedContainer");
+      const text = node.innerText || node.textContent || "";
+      navigator.clipboard?.writeText(text.replace(/^Phrase corrigée :/i,"").trim()).then(()=> {
+        showStatus("Corrigé copié dans le presse-papiers");
+        setTimeout(()=> showStatus("Prêt"),1500);
+      }, ()=> showStatus("Impossible de copier"));
+    });
+
+    // Run a quick quick-check on load
+    window.addEventListener("load", ()=>{ /* no auto-run */ });
+  </script>
+</body>
+</html>
